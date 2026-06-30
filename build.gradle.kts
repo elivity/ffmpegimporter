@@ -9,11 +9,8 @@ plugins {
 }
 
 group = "com.github.elivity"
-version = "1.0.0-SNAPSHOT"
+version = "1.0.0"
 
-kotlin {
-    jvmToolchain(17)
-}
 
 val ffmpegAbisProvider = providers.gradleProperty("ffmpegAbis")
     .orElse("armeabi-v7a,arm64-v8a,x86,x86_64")
