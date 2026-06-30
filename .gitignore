@@ -1,0 +1,4 @@
+/build
+/third_party/ffmpeg-android-maker/
+/ffmpegimporter/src/main/jniLibs/
+/ffmpegimporter/src/main/cpp/ffmpeg/include/
