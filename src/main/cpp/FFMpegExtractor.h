@@ -9,6 +9,7 @@
 #include <android/asset_manager.h>
 #include "libavformat/avio.h"
 #include "libavformat/avformat.h"
+#include "AudioProperties.h"
 
 class FFMpegExtractor {
     bool createAVFormatContext(AVIOContext *avioContext, AVFormatContext **avFormatContext);
@@ -22,13 +23,6 @@ class FFMpegExtractor {
     bool openAVFormatContext(AVFormatContext *avFormatContext, std::string dest);
 
 public:
-    struct AudioProperties {
-        int32_t channelCount;
-        int32_t sampleRate;
-    };
-
-    int64_t decode(AAsset *asset, uint8_t *targetData, AudioProperties targetProperties);
-
     int64_t decode(FILE *asset, FILE *targetData, std::string dest, AudioProperties targetProperties);
 
     bool

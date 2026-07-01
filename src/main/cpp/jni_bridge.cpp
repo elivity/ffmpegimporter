@@ -7,7 +7,7 @@
 #include <jni.h>
 #include "FFMpegExtractor.h"
 #include "fstream"
-#include "../../../../oboe/samples/debug-utils/logging_macros.h"
+#include "AudioProperties.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -34,8 +34,6 @@ Java_com_example_ffmpegimporter_importer_NativeBridgeImporter_00024Companion_exe
     AudioProperties properties = AudioProperties();
     properties.channelCount = 2;
     properties.sampleRate = sampleRate;
-    LOGV("oski out man decode1 %s", rawStringIn);
-    LOGV("oski out man decode %s", rawStringOut);
     extractor.decode(file, fileOut, rawStringIn, properties);
 
     env->ReleaseStringUTFChars(srcPath, rawStringIn);
