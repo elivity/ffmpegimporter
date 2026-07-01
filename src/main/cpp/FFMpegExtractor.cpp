@@ -14,136 +14,180 @@
  * limitations under the License.
  */
 
-
+#include <android/log.h>
+#include <cerrno>
+#include <cinttypes>
+#include <cstdio>
+#include <cstdint>
 #include <memory>
-#include "../../../../oboe/samples/debug-utils/logging_macros.h"
+#include <string>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 #include "FFMpegExtractor.h"
 #include "libavformat/avio.h"
 #include "libavformat/avformat.h"
 #include "libavcodec/avcodec.h"
 #include "libavutil/opt.h"
+#include "libavutil/channel_layout.h"
+#include "libavutil/samplefmt.h"
+#include "libavutil/mem.h"
 #include "libswresample/swresample.h"
+
 #ifdef __cplusplus
 }
 #endif
 
-#include "string"
-constexpr int kInternalBufferSize = 1152; // Use MP3 block size. https://wiki.hydrogenaud.io/index.php?title=MP3
+#ifndef LOG_TAG
+#define LOG_TAG "FFMpegImporter"
+#endif
+
+#ifndef LOGV
+#define LOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__)
+#endif
+
+#ifndef LOGD
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#endif
+
+#ifndef LOGI
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#endif
+
+#ifndef LOGE
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#endif
+
+constexpr int kInternalBufferSize = 1152; // Matches the typical MP3 frame sample count.
 
 int read(void *opaque, uint8_t *buf, int buf_size) {
-    FILE *file = (FILE *)opaque;
-    size_t bytesRead = fread(buf, 1, (size_t)buf_size, file);
+    FILE *file = static_cast<FILE *>(opaque);
+    size_t bytesRead = fread(buf, 1, static_cast<size_t>(buf_size), file);
 
     if (bytesRead == 0) {
-        if (feof(file))
+        if (feof(file)) {
             return AVERROR_EOF;
-        else
+        } else {
             return AVERROR(errno);
+        }
     }
 
-    return (int)bytesRead;
+    return static_cast<int>(bytesRead);
 }
 
 int64_t seek(void *opaque, int64_t offset, int whence) {
-    FILE *file = (FILE *)opaque;
+    FILE *file = static_cast<FILE *>(opaque);
 
     if (whence == AVSEEK_SIZE) {
-        long current_pos = ftell(file);
+        long currentPosition = ftell(file);
         fseek(file, 0, SEEK_END);
         long size = ftell(file);
-        fseek(file, current_pos, SEEK_SET);
+        fseek(file, currentPosition, SEEK_SET);
         return size;
     }
 
-    if (fseek(file, (long)offset, whence) < 0) {
+    if (fseek(file, static_cast<long>(offset), whence) < 0) {
         return -1;
     }
 
     return ftell(file);
 }
 
-bool FFMpegExtractor::createAVIOContext(FILE *asset, uint8_t *buffer, uint32_t bufferSize,
-                                        AVIOContext **avioContext) {
+bool FFMpegExtractor::createAVIOContext(
+        FILE *asset,
+        uint8_t *buffer,
+        uint32_t bufferSize,
+        AVIOContext **avioContext) {
 
-    constexpr int isBufferWriteable = 0;
+    constexpr int isBufferWritable = 0;
 
     *avioContext = avio_alloc_context(
-            buffer, // internal buffer for FFmpeg to use
-            bufferSize, // For optimal decoding speed this should be the protocol block size
-            isBufferWriteable,
-            asset, // Will be passed to our callback functions as a (void *)
-            read, // Read callback function
-            nullptr, // Write callback function (not used)
-            seek); // Seek callback function
-    LOGV("oski avio_alloc_content ");
+            buffer,
+            bufferSize,
+            isBufferWritable,
+            asset,
+            read,
+            nullptr,
+            seek
+    );
 
     if (*avioContext == nullptr) {
         LOGE("Failed to create AVIO context");
         return false;
-    } else {
-        return true;
     }
+
+    LOGV("AVIO context created");
+    return true;
 }
 
-bool
-FFMpegExtractor::createAVFormatContext(AVIOContext *avioContext,
-                                       AVFormatContext **avFormatContext) {
+bool FFMpegExtractor::createAVFormatContext(
+        AVIOContext *avioContext,
+        AVFormatContext **avFormatContext) {
 
     *avFormatContext = avformat_alloc_context();
-    (*avFormatContext)->pb = avioContext;
 
     if (*avFormatContext == nullptr) {
         LOGE("Failed to create AVFormatContext");
         return false;
-    } else {
-        return true;
     }
+
+    (*avFormatContext)->pb = avioContext;
+    return true;
 }
 
-bool FFMpegExtractor::openAVFormatContext(AVFormatContext *avFormatContext, std::string dest) {
+bool FFMpegExtractor::openAVFormatContext(
+        AVFormatContext *avFormatContext,
+        std::string dest) {
 
-    int result = avformat_open_input(&avFormatContext,
-                                     dest.c_str(), /* URL is left empty because we're providing our own I/O */
-                                     nullptr /* AVInputFormat *fmt */,
-                                     nullptr /* AVDictionary **options */
+    int result = avformat_open_input(
+            &avFormatContext,
+            dest.c_str(),
+            nullptr,
+            nullptr
     );
 
     if (result == 0) {
         return true;
-    } else {
-        LOGE("Failed to open file. Error code %s", av_err2str(result));
-        return false;
     }
+
+    LOGE("Failed to open input. Error: %s", av_err2str(result));
+    return false;
 }
 
 bool FFMpegExtractor::getStreamInfo(AVFormatContext *avFormatContext) {
-
-    if (avFormatContext == NULL)  {
-        LOGV("oski NULL MANN");
-    }
-    int result = avformat_find_stream_info(avFormatContext, nullptr);
-    if (result == 0) {
-        return true;
-    } else {
-        LOGE("Failed to find stream info. Error code %s", av_err2str(result));
+    if (avFormatContext == nullptr) {
+        LOGE("AVFormatContext is null");
         return false;
     }
+
+    int result = avformat_find_stream_info(avFormatContext, nullptr);
+
+    if (result == 0) {
+        return true;
+    }
+
+    LOGE("Failed to find stream info. Error: %s", av_err2str(result));
+    return false;
 }
 
 AVStream *FFMpegExtractor::getBestAudioStream(AVFormatContext *avFormatContext) {
-
-    int streamIndex = av_find_best_stream(avFormatContext, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    int streamIndex = av_find_best_stream(
+            avFormatContext,
+            AVMEDIA_TYPE_AUDIO,
+            -1,
+            -1,
+            nullptr,
+            0
+    );
 
     if (streamIndex < 0) {
-        LOGE("Could not find stream");
+        LOGE("Could not find an audio stream");
         return nullptr;
-    } else {
-        return avFormatContext->streams[streamIndex];
     }
+
+    return avFormatContext->streams[streamIndex];
 }
 
 int64_t FFMpegExtractor::decode(
@@ -152,220 +196,295 @@ int64_t FFMpegExtractor::decode(
         std::string destination,
         AudioProperties targetProperties) {
 
-    LOGI("Decoder: FFMpeg");
+    LOGI("Decoder selected: FFmpeg");
 
-    int returnValue = -1; // -1 indicates error
+    int returnValue = -1;
 
-    // Create a buffer for FFmpeg to use for decoding (freed in the custom deleter below)
+    // Allocate the internal buffer used by FFmpeg for input reads.
     auto buffer = reinterpret_cast<uint8_t *>(av_malloc(kInternalBufferSize));
-    LOGI("Decoder: FFMpeg2");
+    if (buffer == nullptr) {
+        LOGE("Failed to allocate internal FFmpeg buffer");
+        return returnValue;
+    }
 
-    // Create an AVIOContext with a custom deleter
+    // Create an AVIOContext with automatic cleanup.
     std::unique_ptr<AVIOContext, void (*)(AVIOContext *)> ioContext{
             nullptr,
-            [](AVIOContext *c) {
-                av_free(c->buffer);
-                avio_context_free(&c);
+            [](AVIOContext *context) {
+                if (context != nullptr) {
+                    av_free(context->buffer);
+                    avio_context_free(&context);
+                }
             }
     };
+
     {
         AVIOContext *tmp = nullptr;
         if (!createAVIOContext(asset, buffer, kInternalBufferSize, &tmp)) {
-            LOGE("Could not create an AVIOContext");
+            LOGE("Could not create AVIOContext");
+            av_free(buffer);
             return returnValue;
         }
         ioContext.reset(tmp);
     }
-    LOGI("Decoder: FFMpeg3");
 
-    // Create an AVFormatContext using the avformat_free_context as the deleter function
+    // Create an AVFormatContext with automatic cleanup.
     std::unique_ptr<AVFormatContext, decltype(&avformat_free_context)> formatContext{
             nullptr,
             &avformat_free_context
     };
+
     {
-        AVFormatContext *tmp;
-        if (!createAVFormatContext(ioContext.get(), &tmp)) return returnValue;
+        AVFormatContext *tmp = nullptr;
+        if (!createAVFormatContext(ioContext.get(), &tmp)) {
+            return returnValue;
+        }
         formatContext.reset(tmp);
     }
-    //LOGV("Decoder: FFMpeg3.0 %i", (int)formatContext.get());
-    LOGI("Decoder: FFMpeg4");
-    //formatContext.reset();
-    if (!openAVFormatContext(formatContext.get(), destination)) return returnValue;
 
-    LOGI("Decoder: FFMpeg4.1 ");
+    if (!openAVFormatContext(formatContext.get(), destination)) {
+        return returnValue;
+    }
 
-    if (!getStreamInfo(formatContext.get())) return returnValue;
-    LOGI("Decoder: FFMpeg4.2");
+    if (!getStreamInfo(formatContext.get())) {
+        return returnValue;
+    }
 
-    // Obtain the best audio stream to decode
+    // Select the most suitable audio stream for decoding.
     AVStream *stream = getBestAudioStream(formatContext.get());
     if (stream == nullptr || stream->codecpar == nullptr) {
         LOGE("Could not find a suitable audio stream to decode");
         return returnValue;
     }
-    LOGI("Decoder: FFMpeg5.1");
 
     printCodecParameters(stream->codecpar);
 
-    // Find the codec to decode this stream
-    AVCodec *codec = const_cast<AVCodec *>(avcodec_find_decoder(stream->codecpar->codec_id));
-    if (!codec) {
+    // Find the decoder for the selected audio stream.
+    AVCodec *codec = const_cast<AVCodec *>(
+            avcodec_find_decoder(stream->codecpar->codec_id)
+    );
+
+    if (codec == nullptr) {
         LOGE("Could not find codec with ID: %d", stream->codecpar->codec_id);
         return returnValue;
     }
-    LOGI("Decoder: FFMpeg5.2");
 
-    // Create the codec context, specifying the deleter function
+    // Create the codec context with automatic cleanup.
     std::unique_ptr<AVCodecContext, void (*)(AVCodecContext *)> codecContext{
             nullptr,
-            [](AVCodecContext *c) { avcodec_free_context(&c); }
+            [](AVCodecContext *context) {
+                avcodec_free_context(&context);
+            }
     };
+
     {
         AVCodecContext *tmp = avcodec_alloc_context3(codec);
-        if (!tmp) {
+        if (tmp == nullptr) {
             LOGE("Failed to allocate codec context");
             return returnValue;
         }
         codecContext.reset(tmp);
     }
-    LOGI("Decoder: FFMpeg5.3");
 
-    // Copy the codec parameters into the context
+    // Copy stream codec parameters into the codec context.
     if (avcodec_parameters_to_context(codecContext.get(), stream->codecpar) < 0) {
         LOGE("Failed to copy codec parameters to codec context");
         return returnValue;
     }
-    LOGI("Decoder: FFMpeg5");
 
-    // Open the codec
+    // Open the decoder.
     if (avcodec_open2(codecContext.get(), codec, nullptr) < 0) {
         LOGE("Could not open codec");
         return returnValue;
     }
 
-    // prepare resampler
+    // Prepare the resampler.
     int32_t outChannelLayout = (1 << targetProperties.channelCount) - 1;
-    LOGD("Channel layout %d", outChannelLayout);
+    LOGD("Output channel layout: %d", outChannelLayout);
 
     SwrContext *swr = swr_alloc();
+    if (swr == nullptr) {
+        LOGE("Failed to allocate resampler context");
+        return returnValue;
+    }
 
-    AVChannelLayout in_ch_layout;
-    AVChannelLayout out_ch_layout;
+    AVChannelLayout inChannelLayout;
+    AVChannelLayout outChannelLayoutConfig;
 
-    av_channel_layout_default(&in_ch_layout, stream->codecpar->ch_layout.nb_channels);
-    av_channel_layout_default(&out_ch_layout, targetProperties.channelCount);
+    av_channel_layout_default(
+            &inChannelLayout,
+            stream->codecpar->ch_layout.nb_channels
+    );
 
-    // Now set options
-    av_opt_set_chlayout(swr, "in_chlayout",  &in_ch_layout, 0);
-    av_opt_set_chlayout(swr, "out_chlayout", &out_ch_layout, 0);
+    av_channel_layout_default(
+            &outChannelLayoutConfig,
+            targetProperties.channelCount
+    );
 
-    // Other options stay the same
-    av_opt_set_int(swr, "in_sample_rate",     stream->codecpar->sample_rate, 0);
-    av_opt_set_int(swr, "out_sample_rate",    targetProperties.sampleRate, 0);
-    av_opt_set_int(swr, "in_sample_fmt",      stream->codecpar->format, 0);
+    // Configure input and output channel layouts.
+    av_opt_set_chlayout(swr, "in_chlayout", &inChannelLayout, 0);
+    av_opt_set_chlayout(swr, "out_chlayout", &outChannelLayoutConfig, 0);
+
+    // Configure sample rate and sample format conversion.
+    av_opt_set_int(swr, "in_sample_rate", stream->codecpar->sample_rate, 0);
+    av_opt_set_int(swr, "out_sample_rate", targetProperties.sampleRate, 0);
+    av_opt_set_int(swr, "in_sample_fmt", stream->codecpar->format, 0);
     av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-
     av_opt_set_int(swr, "force_resampling", 1, 0);
 
-    // Check that resampler has been inited
+    // Initialize and validate the resampler.
     int result = swr_init(swr);
     if (result != 0) {
         LOGE("swr_init failed. Error: %s", av_err2str(result));
+        swr_free(&swr);
         return returnValue;
     }
 
     if (!swr_is_initialized(swr)) {
-        LOGE("swr_is_initialized is false\n");
+        LOGE("Resampler was not initialized");
+        swr_free(&swr);
         return returnValue;
     }
 
-    // Prepare to read data
+    // Prepare packet and frame buffers for decoding.
     int bytesWritten = 0;
+
+    int bytesPerSample = av_get_bytes_per_sample(
+            static_cast<AVSampleFormat>(stream->codecpar->format)
+    );
+
+    LOGD("Input bytes per sample: %d", bytesPerSample);
+
     AVPacket *avPacket = av_packet_alloc();
-    AVFrame *decodedFrame = av_frame_alloc(); // Stores raw audio data
-    int bytesPerSample = av_get_bytes_per_sample((AVSampleFormat) stream->codecpar->format);
+    AVFrame *decodedFrame = av_frame_alloc();
 
-    LOGD("Bytes per sample %d", bytesPerSample);
+    if (avPacket == nullptr || decodedFrame == nullptr) {
+        LOGE("Failed to allocate packet or frame");
+        goto cleanup;
+    }
 
-    // While there is more data to read, read it into the avPacket
+    LOGD("Input bytes per sample: %d", bytesPerSample);
+
+    // Decode packets from the selected audio stream.
     while (av_read_frame(formatContext.get(), avPacket) == 0) {
-
         if (avPacket->stream_index == stream->index && avPacket->size > 0) {
-
-            // Pass our compressed data into the codec
+            // Send compressed packet data to the decoder.
             result = avcodec_send_packet(codecContext.get(), avPacket);
             if (result != 0) {
-                LOGE("avcodec_send_packet error: %s", av_err2str(result));
+                LOGE("avcodec_send_packet failed. Error: %s", av_err2str(result));
                 goto cleanup;
             }
 
-            // Retrieve our raw data from the codec
+            // Receive decoded PCM frame data from the decoder.
             result = avcodec_receive_frame(codecContext.get(), decodedFrame);
             if (result == AVERROR(EAGAIN)) {
-                // The codec needs more data before it can decode
-                LOGI("avcodec_receive_frame returned EAGAIN");
+                LOGI("Decoder requires more packet data");
                 av_packet_unref(avPacket);
                 continue;
             } else if (result != 0) {
-                LOGE("avcodec_receive_frame error: %s", av_err2str(result));
+                LOGE("avcodec_receive_frame failed. Error: %s", av_err2str(result));
                 goto cleanup;
             }
 
-            // DO RESAMPLING
-            auto dst_nb_samples = (int32_t) av_rescale_rnd(
-                    swr_get_delay(swr, decodedFrame->sample_rate) + decodedFrame->nb_samples,
-                    targetProperties.sampleRate,
-                    decodedFrame->sample_rate,
-                    AV_ROUND_UP);
-            uint8_t *buffer1 = nullptr;
-            av_samples_alloc(
-                    &buffer1,
+            // Resample decoded audio to the requested output format.
+            auto dstNbSamples = static_cast<int32_t>(
+                    av_rescale_rnd(
+                            swr_get_delay(swr, decodedFrame->sample_rate)
+                            + decodedFrame->nb_samples,
+                            targetProperties.sampleRate,
+                            decodedFrame->sample_rate,
+                            AV_ROUND_UP
+                    )
+            );
+
+            uint8_t *resampledBuffer = nullptr;
+
+            result = av_samples_alloc(
+                    &resampledBuffer,
                     nullptr,
                     targetProperties.channelCount,
-                    dst_nb_samples,
+                    dstNbSamples,
                     AV_SAMPLE_FMT_S16,
-                    0);
+                    0
+            );
 
-            int frame_count = swr_convert(
-                    swr,
-                    &buffer1,
-                    dst_nb_samples,
-                    (const uint8_t **) decodedFrame->data,
-                    decodedFrame->nb_samples);
-
-            int64_t bytesToWrite = frame_count * sizeof(int16_t) * targetProperties.channelCount;
-            //memcpy(targetData + bytesWritten, buffer1, (size_t) bytesToWrite);
-            size_t written = fwrite(buffer1, 1, (size_t)bytesToWrite, targetData);
-            if (written != (size_t)bytesToWrite) {
-                LOGE("Failed to write all audio data to file");
+            if (result < 0 || resampledBuffer == nullptr) {
+                LOGE("Failed to allocate resampled audio buffer. Error: %s", av_err2str(result));
                 goto cleanup;
             }
-            bytesWritten += written;
-            //bytesWritten += bytesToWrite;
 
-            av_freep(&buffer1);
+            int frameCount = swr_convert(
+                    swr,
+                    &resampledBuffer,
+                    dstNbSamples,
+                    const_cast<const uint8_t **>(decodedFrame->data),
+                    decodedFrame->nb_samples
+            );
 
-            av_packet_unref(avPacket);
+            if (frameCount < 0) {
+                LOGE("swr_convert failed. Error: %s", av_err2str(frameCount));
+                av_freep(&resampledBuffer);
+                goto cleanup;
+            }
+
+            int64_t bytesToWrite =
+                    frameCount * sizeof(int16_t) * targetProperties.channelCount;
+
+            size_t written = fwrite(
+                    resampledBuffer,
+                    1,
+                    static_cast<size_t>(bytesToWrite),
+                    targetData
+            );
+
+            av_freep(&resampledBuffer);
+
+            if (written != static_cast<size_t>(bytesToWrite)) {
+                LOGE("Failed to write all audio data to the output file");
+                goto cleanup;
+            }
+
+            bytesWritten += static_cast<int>(written);
         }
-    }
 
-    fclose(asset);
-    fclose(targetData);
-    av_frame_free(&decodedFrame);
+        av_packet_unref(avPacket);
+    }
 
     returnValue = bytesWritten;
 
     cleanup:
+    if (avPacket != nullptr) {
+        av_packet_free(&avPacket);
+    }
+
+    if (decodedFrame != nullptr) {
+        av_frame_free(&decodedFrame);
+    }
+
+    if (swr != nullptr) {
+        swr_free(&swr);
+    }
+
+    if (asset != nullptr) {
+        fclose(asset);
+    }
+
+    if (targetData != nullptr) {
+        fclose(targetData);
+    }
+
     return returnValue;
 }
 
 void FFMpegExtractor::printCodecParameters(AVCodecParameters *params) {
+    if (params == nullptr) {
+        LOGE("Codec parameters are null");
+        return;
+    }
 
     LOGD("Stream properties");
-    //LOGD("Channels: %d", params->ch_layout);
-    LOGD("Channel layout: %i" PRId64, (int) params->ch_layout.nb_channels);
+    LOGD("Channel count: %d", params->ch_layout.nb_channels);
     LOGD("Sample rate: %d", params->sample_rate);
-    LOGD("Format: %s", av_get_sample_fmt_name((AVSampleFormat) params->format));
+    LOGD("Format: %s", av_get_sample_fmt_name(static_cast<AVSampleFormat>(params->format)));
     LOGD("Frame size: %d", params->frame_size);
 }
