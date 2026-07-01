@@ -34,8 +34,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
 
+        ndkVersion = "27.2.12479018"
+
         externalNativeBuild {
             cmake {
+                version = "3.22.1"
                 arguments(
                     "-DFFMPEG_JNI_LIBS_DIR=${ffmpegJniLibsDir.asFile.absolutePath}",
                     "-DFFMPEG_INCLUDE_DIR=${ffmpegHeadersDir.asFile.absolutePath}"

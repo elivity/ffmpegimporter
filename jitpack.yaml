@@ -1,0 +1,11 @@
+jdk:
+  - openjdk17
+
+before_install:
+  - rm -rf ~/.gradle/caches
+  - rm -rf "$ANDROID_HOME/ndk/27.2.12479018"
+  - yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+  - "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+install:
+  - ./gradlew clean publishToMavenLocal -Pgroup=$GROUP -Pversion=$VERSION --no-daemon --stacktrace
