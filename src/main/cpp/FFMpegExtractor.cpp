@@ -640,14 +640,6 @@ int64_t FFMpegExtractor::decode(
                 0);
     }
 
-    if (result >= 0) {
-        result = av_opt_set_int(
-                swr.get(),
-                "force_resampling",
-                1,
-                0);
-    }
-
     if (result < 0) {
         LOGE("Failed to configure resampler. Error: %s",
              av_err2str(result));
